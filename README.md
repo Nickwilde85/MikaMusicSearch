@@ -19,32 +19,54 @@ Telegram бот для поиска и скачивания музыки с YouT
 
 1. **Клонируй репозиторий:**
    ```bash
-   git clone https://github.com/your-username/music-bot.git
-   cd music-bot
+   git clone https://github.com/your-username/MikaMusicSearch.git
+   cd MikaMusicSearch
    ```
 
-2. **Установи зависимости:**
+2. **Создай виртуальное окружение:**
+
+   ### 🐧 Linux / macOS
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+   ### 🪟 Windows
+   ```bash
+   python -m venv venv
+   venv\Scripts\activate
+   ```
+
+   После активации в начале строки появится `(venv)` — это значит окружение активно.
+
+   > **Деактивировать** окружение: `deactivate`  
+   > **Активировать снова** (каждый раз при новой сессии терминала):  
+   > Linux/macOS: `source venv/bin/activate`  
+   > Windows: `venv\Scripts\activate`
+
+3. **Установи зависимости:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Создай файл `.env` из примера:**
+4. **Создай файл `.env` из примера:**
    ```bash
-   cp .env.example .env
+   cp .env.example .env        # Linux/macOS
+   copy .env.example .env      # Windows
    ```
 
-4. **Заполни `.env`:**
+5. **Заполни `.env`:**
    ```env
    BOT_TOKEN=your_telegram_bot_token_here
    ```
    Токен получи у [@BotFather](https://t.me/BotFather).
 
-5. **Установи ffmpeg:**
+6. **Установи ffmpeg:**
    - Windows: скачай с [gyan.dev](https://www.gyan.dev/ffmpeg/builds/), распакуй и добавь папку `bin` в PATH
    - Linux: `sudo apt install ffmpeg`
    - macOS: `brew install ffmpeg`
 
-6. **Запусти бота:**
+7. **Запусти бота:**
    ```bash
    python bot.py
    ```
