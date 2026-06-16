@@ -31,7 +31,7 @@ dp = Dispatcher()
 
 
 # ---------------------------------------------------------------------------
-# Session state — one dataclass per user instead of 3 separate dicts
+# State
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -40,12 +40,17 @@ class UserSession:
     page: int = 0
 
 
-_sessions: dict[int, UserSession] = {}     # user_id -> session
-_pending: dict[int, str] = {}              # user_id -> pending search query
+_sessions: dict[int, UserSession] = {}
+_pending: dict[int, str] = {}
+_formats: dict[int, str] = {}          # user_id -> "m4a" | "mp3"  (default: m4a)
+
+
+def get_fmt(user_id: int) -> str:
+    return _formats.get(user_id, "m4a")
 
 
 # ---------------------------------------------------------------------------
-# Source keyboard (built once, reused everywhere)
+# Keyboards
 # ---------------------------------------------------------------------------
 
 SOURCE_KB = InlineKeyboardMarkup(inline_keyboard=[[
@@ -54,21 +59,37 @@ SOURCE_KB = InlineKeyboardMarkup(inline_keyboard=[[
 ]])
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def is_supported_url(text: str) -> bool:
-    t = text.lower().strip()
-    return any(domain in t for domain in (
-        "soundcloud.com/", "on.soundcloud.com/",
-        "youtu.be/", "youtube.com/watch", "youtube.com/shorts/",
-    ))
+def start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⚙️ Настройки", callback_data="open_settings"),
+    ]])
 
 
-def track_info(track: Track) -> str:
-    icon = {"youtube": "🎵", "soundcloud": "☁️"}.get(track.source, "🎵")
-    return f"{icon} <b>{track.artist}</b> — <b>{track.title}</b>\n⏱ {format_duration(track.duration)}"
+def settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    fmt = get_fmt(user_id)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if fmt == 'm4a' else '⬜'} M4A (быстро, без конвертации)",
+                callback_data="fmt:m4a",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if fmt == 'mp3_192' else '⬜'} MP3 192kbps",
+                callback_data="fmt:mp3_192",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if fmt == 'mp3_320' else '⬜'} MP3 320kbps",
+                callback_data="fmt:mp3_320",
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="◀ Назад", callback_data="settings_back"),
+        ],
+    ])
 
 
 def build_page_keyboard(tracks: list[Track], page: int) -> InlineKeyboardMarkup:
@@ -94,6 +115,23 @@ def build_page_keyboard(tracks: list[Track], page: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def is_supported_url(text: str) -> bool:
+    t = text.lower().strip()
+    return any(d in t for d in (
+        "soundcloud.com/", "on.soundcloud.com/",
+        "youtu.be/", "youtube.com/watch", "youtube.com/shorts/",
+    ))
+
+
+def track_info(track: Track) -> str:
+    icon = {"youtube": "🎵", "soundcloud": "☁️"}.get(track.source, "🎵")
+    return f"{icon} <b>{track.artist}</b> — <b>{track.title}</b>\n⏱ {format_duration(track.duration)}"
+
+
 def build_page_text(tracks: list[Track], page: int, source_name: str) -> str:
     total = len(tracks)
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
@@ -106,8 +144,24 @@ def build_page_text(tracks: list[Track], page: int, source_name: str) -> str:
     return "\n".join(lines)
 
 
+def settings_text(user_id: int) -> str:
+    fmt = get_fmt(user_id)
+    labels = {
+        "m4a":     "M4A (быстро, без конвертации)",
+        "mp3_192": "MP3 192kbps",
+        "mp3_320": "MP3 320kbps",
+    }
+    label = labels.get(fmt, fmt)
+    return (
+        "⚙️ <b>Настройки</b>\n\n"
+        f"Текущий формат: <b>{label}</b>\n\n"
+        "<i>M4A — скачивается быстрее, не требует ffmpeg.\n"
+        "MP3 192kbps — стандартное качество.\n"
+        "MP3 320kbps — максимальное качество, чуть дольше конвертация.</i>"
+    )
+
+
 async def _keep_uploading(chat_id: int, action: str, stop: asyncio.Event):
-    """Ping upload indicator every 4s so Telegram keeps showing it."""
     while not stop.is_set():
         try:
             await bot.send_chat_action(chat_id=chat_id, action=action)
@@ -117,7 +171,6 @@ async def _keep_uploading(chat_id: int, action: str, stop: asyncio.Event):
 
 
 async def send_audio_fast(chat_id: int, file_path: str, track: Track) -> None:
-    """Send audio file with a live upload indicator."""
     ext = os.path.splitext(file_path)[1].lower()
     is_audio = ext in (".mp3", ".m4a", ".flac")
     action = "upload_voice" if is_audio else "upload_document"
@@ -143,11 +196,10 @@ async def send_audio_fast(chat_id: int, file_path: str, track: Track) -> None:
         indicator.cancel()
 
 
-async def _do_download(chat_id: int, status_msg: Message, track: Track) -> None:
-    """Shared download+send logic used by both URL and search handlers."""
+async def _do_download(chat_id: int, user_id: int, status_msg: Message, track: Track) -> None:
     file_path: Optional[str] = None
     try:
-        file_path = await download_track(track)
+        file_path = await download_track(track, fmt=get_fmt(user_id))
         await send_audio_fast(chat_id, file_path, track)
         await status_msg.delete()
     except FileTooLargeError as e:
@@ -176,6 +228,7 @@ async def cmd_start(message: Message):
         "👋 Привет! Я <b>MikaMusicSearch</b>.\n\n"
         "Отправь название трека или исполнителя — найду и скачаю.\n\n"
         "/help — помощь",
+        reply_markup=start_keyboard(),
         parse_mode=ParseMode.HTML,
     )
 
@@ -196,6 +249,46 @@ async def cmd_help(message: Message):
     )
 
 
+# --- Settings ---
+
+@dp.callback_query(F.data == "open_settings")
+async def on_open_settings(callback: CallbackQuery):
+    await callback.message.edit_text(
+        settings_text(callback.from_user.id),
+        reply_markup=settings_keyboard(callback.from_user.id),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("fmt:"))
+async def on_fmt_change(callback: CallbackQuery):
+    fmt = callback.data.split(":", 1)[1]
+    user_id = callback.from_user.id
+    _formats[user_id] = fmt
+    label = {"m4a": "M4A", "mp3_192": "MP3 192kbps", "mp3_320": "MP3 320kbps"}.get(fmt, fmt)
+    await callback.message.edit_text(
+        settings_text(user_id),
+        reply_markup=settings_keyboard(user_id),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer(f"✅ Формат изменён на {label}", show_alert=False)
+
+
+@dp.callback_query(F.data == "settings_back")
+async def on_settings_back(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "👋 Привет! Я <b>MikaMusicSearch</b>.\n\n"
+        "Отправь название трека или исполнителя — найду и скачаю.\n\n"
+        "/help — помощь",
+        reply_markup=start_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+# --- Search ---
+
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: Message):
     query = message.text.strip()
@@ -209,12 +302,11 @@ async def handle_text(message: Message):
         except Exception as e:
             await status_msg.edit_text(f"❌ Не удалось получить трек по ссылке: {e}")
             return
-
         await status_msg.edit_text(
             f"⏬ Скачиваю: {track_info(track)}\nПожалуйста, подожди...",
             parse_mode=ParseMode.HTML,
         )
-        await _do_download(message.chat.id, status_msg, track)
+        await _do_download(message.chat.id, message.from_user.id, status_msg, track)
         return
 
     _pending[message.from_user.id] = query
@@ -303,7 +395,7 @@ async def on_download(callback: CallbackQuery):
         f"⏬ Скачиваю: {track_info(track)}\nПожалуйста, подожди...",
         parse_mode=ParseMode.HTML,
     )
-    await _do_download(callback.message.chat.id, status_msg, track)
+    await _do_download(callback.message.chat.id, user_id, status_msg, track)
 
 
 # ---------------------------------------------------------------------------

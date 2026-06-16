@@ -32,11 +32,17 @@ def _url_hash(url: str) -> str:
 
 
 def _find_file(safe_title: str) -> Optional[str]:
-    """Find a downloaded audio file by sanitised title (single glob pass)."""
+    """Find a downloaded audio file by sanitised title (mp3 first)."""
     pattern = os.path.join(DOWNLOAD_DIR, f"{safe_title}*")
-    for f in glob.glob(pattern):
-        if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS:
-            return f
+    priority = (".mp3", ".m4a", ".opus", ".ogg", ".webm", ".flac", ".wav")
+    found = {
+        os.path.splitext(f)[1].lower(): f
+        for f in glob.glob(pattern)
+        if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS
+    }
+    for ext in priority:
+        if ext in found:
+            return found[ext]
     return None
 
 
@@ -57,27 +63,41 @@ _YDL_OPTS_BASE = {
 }
 
 
-async def download_track(track: Track) -> str:
+async def download_track(track: Track, fmt: str = "m4a") -> str:
     """
     Download a track to DOWNLOAD_DIR and return the local file path.
+    fmt: "m4a" (fast, no re-encoding) or "mp3" (converted via ffmpeg)
     Uses an in-memory cache to avoid re-downloading the same URL.
     """
     url = track.url
-    key = _url_hash(url)
+    key = _url_hash(url) + fmt  # cache key includes format
 
     # Cache hit
     cached = _cache.get(key)
     if cached and os.path.exists(cached):
         return cached
     elif cached:
-        # Stale cache entry
         _cache.pop(key, None)
         _cache_rev.pop(cached, None)
 
     safe_title = _sanitise(f"{track.artist} - {track.title}")
     output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
 
-    opts = {**_YDL_OPTS_BASE, "outtmpl": output_template}
+    if fmt in ("mp3_192", "mp3_320"):
+        quality = "320" if fmt == "mp3_320" else "192"
+        opts = {
+            **_YDL_OPTS_BASE,
+            "outtmpl": output_template,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": quality,
+                }
+            ],
+        }
+    else:
+        opts = {**_YDL_OPTS_BASE, "outtmpl": output_template}
 
     def _sync_download():
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -117,5 +137,8 @@ def cleanup_file(path: str) -> None:
 
 
 def _sanitise(name: str) -> str:
-    keep = set(" abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_()[].,")
+    keep = set(
+        " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_()[].,'"
+        "абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
+    )
     return "".join(c if c in keep else "_" for c in name)[:100]
