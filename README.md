@@ -19,7 +19,7 @@ Telegram бот для поиска и скачивания музыки с YouT
 
 1. **Клонируй репозиторий:**
    ```bash
-   git clone https://github.com/your-username/MikaMusicSearch.git
+   git clone https://github.com/Nickwilde85/MikaMusicSearch.git
    cd MikaMusicSearch
    ```
 
